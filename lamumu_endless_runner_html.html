@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lamumu Dash — Endless Runner</title>
+<style>
+  :root{ --bg:#0b0d12; --ink:#f0f3f6; --muted:#aeb6bf; --accent:#69e4a6; --danger:#ff6b6b }
+  *{ box-sizing:border-box }
+  html,body{ height:100% }
+  body{ margin:0; background:radial-gradient(1200px 800px at 70% -10%, #1a1f28 0%, var(--bg) 45%); color:var(--ink); font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial }
+  canvas{ display:block; width:100vw; height:100vh }
+  .hud{ position:fixed; inset:0; pointer-events:none }
+  .top{ position:absolute; left:14px; top:10px; display:flex; gap:10px }
+  .pill{ pointer-events:auto; background:rgba(18,20,26,.7); border:1px solid #262c38; padding:8px 12px; border-radius:12px; backdrop-filter:blur(4px) }
+  .pill b{ font-size:18px }
+  .controls{ position:absolute; right:14px; top:10px; display:flex; gap:8px }
+  button{ pointer-events:auto; background:var(--accent); color:#062017; border:none; padding:10px 14px; border-radius:12px; font-weight:700; cursor:pointer }
+  button.ghost{ background:transparent; color:var(--ink); border:1px solid #262c38 }
+  .center{ position:absolute; inset:0; display:grid; place-items:center }
+  .card{ width:min(560px,92vw); background:linear-gradient(180deg,#161a22,#0f1217); border:1px solid #262c38; border-radius:16px; padding:20px; text-align:center; box-shadow:0 20px 40px rgba(0,0,0,.35) }
+  h1{ margin:8px 0 6px; font-size:clamp(24px,4.2vw,32px) }
+  p{ color:var(--muted); margin:6px 0 12px }
+  .kbd{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; background:#0c1016; border:1px solid #242a36; border-radius:6px; padding:2px 6px }
+  .toast{ position:fixed; left:50%; top:14px; transform:translateX(-50%); background:#0e1116; border:1px solid #262c38; border-radius:12px; padding:8px 12px; opacity:0; transition:opacity .25s ease; color:var(--ink) }
+  .toast.show{ opacity:1 }
+</style>
+</head>
+<body>
+  <canvas id="game" width="1280" height="720" aria-label="Lamumu Dash Endless Runner" role="img"></canvas>
+  <div class="hud" aria-live="polite">
+    <div class="top">
+      <div class="pill">Score: <b id="score">0</b></div>
+      <div class="pill">Best: <b id="best">0</b></div>
+      <div class="pill">Milk: <b id="milk">0</b></div>
+      <div class="pill">Level: <b id="level">1</b></div>
+    </div>
+    <div class="controls">
+      <button id="startBtn">▶ Start</button>
+      <button class="ghost" id="pauseBtn">⏸️ Pause</button>
+      <button class="ghost" id="restartBtn">↻ Restart</button>
+    </div>
+    <div id="menu" class="center">
+      <div class="card">
+        <h1>🐄 Lamumu Dash — Endless Runner</h1>
+        <p>Run as <b>Lamumu</b> and leap over obstacles, slide under gates, and grab milk bottles to boost your combo. The longer you survive, the faster it gets.</p>
+        <p>Controls: <span class="kbd">Space / ↑</span> Jump (double‑jump) • <span class="kbd">↓</span> Slide • <span class="kbd">P</span> Pause • <span class="kbd">R</span> Restart • <span class="kbd">Tap</span> Jump on mobile</p>
+        <button id="menuStart">Start Game</button>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="toast">Nice!</div>
+
+<script>
+// ===== Utilities & RNG =====
+const TAU=Math.PI*2; const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+const rand=(a,b)=>Math.random()*(b-a)+a; const irand=(a,b)=>Math.floor(rand(a,b+1));
+
+// ===== Canvas / DPI =====
+const canvas=document.getElementById('game'); const ctx=canvas.getContext('2d');
+const dpr=Math.max(1,window.devicePixelRatio||1);
+function resize(){ const w=innerWidth,h=innerHeight; canvas.style.width=w+'px'; canvas.style.height=h+'px'; canvas.width=Math.floor(w*dpr); canvas.height=Math.floor(h*dpr); ctx.setTransform(dpr,0,0,dpr,0,0); }
+addEventListener('resize',resize,{passive:true}); resize();
+
+// ===== HUD =====
+const scoreEl=document.getElementById('score'); const bestEl=document.getElementById('best'); const milkEl=document.getElementById('milk'); const levelEl=document.getElementById('level');
+bestEl.textContent=localStorage.getItem('lamumuDashBest')||'0';
+const toastEl=document.getElementById('toast');
+function toast(msg){ toastEl.textContent=msg; toastEl.classList.add('show'); setTimeout(()=>toastEl.classList.remove('show'),650); }
+
+// ===== Player (Lamumu) sprite offscreen =====
+const cowCan=document.createElement('canvas'), cowCtx=cowCan.getContext('2d');
+function makeCow(){ const s=84; cowCan.width=s; cowCan.height=s; cowCtx.clearRect(0,0,s,s);
+  // body
+  cowCtx.fillStyle='#fff'; cowCtx.beginPath(); cowCtx.ellipse(40,44,28,20,0,0,TAU); cowCtx.fill();
+  // head
+  cowCtx.beginPath(); cowCtx.ellipse(66,40,11,9,0,0,TAU); cowCtx.fill();
+  // ears
+  cowCtx.fillStyle='#111'; cowCtx.beginPath(); cowCtx.ellipse(58,30,4,3,0,0,TAU); cowCtx.ellipse(74,30,4,3,0,0,TAU); cowCtx.fill();
+  // legs
+  cowCtx.fillStyle='#222'; for(let i=0;i<4;i++){ cowCtx.fillRect(18+i*12,60,5,12); }
+  // nose
+  cowCtx.fillRect(60,42,10,6);
+  // patches
+  cowCtx.fillStyle='#000'; for(let i=0;i<4;i++){ cowCtx.globalAlpha=0.8-rand(0,0.2); cowCtx.beginPath(); cowCtx.ellipse(rand(18,54), rand(34,52), rand(4,8), rand(3,6),0,0,TAU); cowCtx.fill(); }
+  cowCtx.globalAlpha=1;
+}
+makeCow();
+
+// ===== Game State =====
+let playing=false, paused=false; let score=0, milk=0, level=1, speed=280; // px/s ground scroll
+let combo=0, comboTimer=0;
+
+const groundY=()=> Math.floor(innerHeight*0.72);
+
+const player={ x: 120, y: 0, vy:0, w:60, h:44, onGround:false, slide:false, coyote:0, jumps:0 };
+function resetPlayer(){ player.y=groundY()-player.h; player.vy=0; player.onGround=true; player.slide=false; player.coyote=0; player.jumps=0; }
+
+const obstacles=[]; const bottles=[]; const particles=[]; const MAX_PARTICLES=220;
+
+function reset(){ playing=false; paused=false; score=0; milk=0; level=1; speed=280; combo=0; comboTimer=0; obstacles.length=0; bottles.length=0; particles.length=0; resetPlayer(); updateHud(); }
+reset();
+
+// ===== Spawners =====
+let obsTimer=0, botTimer=0; let obsInterval=1100, botInterval=900;
+function spawnObstacle(){
+  const type=Math.random()<0.55?'rock':'gate';
+  const y=type==='rock'? groundY()-28 : groundY()-90;
+  const w=type==='rock'? irand(26,42) : irand(28,34);
+  const h=type==='rock'? 22 : 70; // gate requires slide
+  obstacles.push({ x: innerWidth+40, y, w, h, type });
+}
+function spawnBottle(){ bottles.push({ x: innerWidth+40, y: groundY()-irand(80,140), r:10 }); }
+
+// ===== Input =====
+let touching=false; addEventListener('pointerdown',e=>{ touching=true; if(!playing||paused){ return; } jump(); }); addEventListener('pointerup',()=>{ touching=false; });
+addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.key==='ArrowUp'){ e.preventDefault(); if(playing&&!paused) jump(); }
+  if(e.key==='ArrowDown'){ if(playing&&!paused) slide(true); }
+  if(e.key==='p'||e.key==='P'){ togglePause(); }
+  if(e.key==='r'||e.key==='R'){ restart(); }
+});
+addEventListener('keyup',e=>{ if(e.key==='ArrowDown'){ slide(false); }});
+
+function jump(){ // coyote & double-jump
+  if(player.onGround || player.coyote>0 || player.jumps<1){
+    player.vy=-520; player.onGround=false; player.coyote=0; player.jumps++;
+  }
+}
+function slide(state){ player.slide=state; }
+
+// ===== Physics & Helpers =====
+function rectsOverlap(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+function collectBottle(b){ milk++; combo++; comboTimer=1.8; spawnPop(b.x,b.y,'milk'); updateHud(); }
+function hitObstacle(){ combo=0; milk=Math.max(0,milk-2); spawnPop(player.x+player.w/2, player.y,'hit'); if(--lives<=0){ gameOver(); } updateHud(); }
+
+let lives=3; function resetLives(){ lives=3; }
+
+function spawnPop(x,y,kind){ // small particles + floating text
+  for(let i=0;i<10;i++) particles.push({x,y, vx:rand(-80,80), vy:rand(-160,-40), g:520, life:rand(.3,.7)});
+  particles.push({label: kind==='milk'?'+🥛':(kind==='hit'?'Ouch!':'+'), x, y, life:1.2});
+  if(particles.length>MAX_PARTICLES) particles.splice(0, particles.length-MAX_PARTICLES);
+}
+
+// ===== Loop =====
+let last=performance.now();
+function loop(t){ requestAnimationFrame(loop); const dt=(t-last)/1000; last=t; drawBackground(); if(!playing||paused){ drawForeground(0,true); return; } update(dt); drawForeground(dt,false); }
+requestAnimationFrame(loop);
+
+function update(dt){
+  // speed ramps with level
+  speed = 280 + (level-1)*28 + Math.min(220, score*0.06);
+
+  // spawn
+  obsTimer+=dt*1000; botTimer+=dt*1000;
+  if(obsTimer>=obsInterval){ obsTimer=0; spawnObstacle(); }
+  if(botTimer>=botInterval){ botTimer=0; spawnBottle(); }
+
+  // update obstacles/bottles
+  for(let i=obstacles.length-1;i>=0;i--){ const o=obstacles[i]; o.x -= speed*dt; if(o.x+o.w<-60) obstacles.splice(i,1); }
+  for(let i=bottles.length-1;i>=0;i--){ const b=bottles[i]; b.x -= speed*dt; if(b.x+b.r<-40) bottles.splice(i,1); }
+
+  // gravity
+  const G=1600; player.vy += G*dt; player.y += player.vy*dt;
+  const gy=groundY();
+  if(player.y>=gy-player.h){ player.y=gy-player.h; player.vy=0; if(!player.onGround){ player.onGround=true; player.jumps=0; } player.coyote=0.12; } else { player.coyote=Math.max(0, player.coyote-dt); }
+
+  // slide affects hitbox
+  const ph={ x:player.x, y: player.slide? player.y+player.h*0.35 : player.y, w: player.w, h: player.slide? player.h*0.65 : player.h };
+
+  // collisions
+  for(let i=obstacles.length-1;i>=0;i--){ const o=obstacles[i]; if(rectsOverlap(ph,o)){ obstacles.splice(i,1); hitObstacle(); } }
+  for(let i=bottles.length-1;i>=0;i--){ const b=bottles[i]; const r={x:b.x-b.r,y:b.y-b.r,w:b.r*2,h:b.r*2}; if(rectsOverlap(ph,r)){ bottles.splice(i,1); collectBottle(b); } }
+
+  // scoring & level
+  score += dt* (1 + combo*0.15); level = 1 + Math.floor(score/120);
+  obsInterval = clamp(1100 - level*40, 550, 1100); botInterval = clamp(900 - level*35, 420, 900);
+
+  // combo timer
+  comboTimer=Math.max(0, comboTimer-dt); if(comboTimer===0) combo=0;
+
+  // particles
+  for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; if(p.label){ p.y-=40*dt; p.life-=dt; if(p.life<=0) particles.splice(i,1); } else { p.vy+=p.g*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.life-=dt; if(p.life<=0) particles.splice(i,1); } }
+
+  updateHud();
+}
+
+// ===== Drawing =====
+function drawBackground(){ const w=innerWidth,h=innerHeight; ctx.clearRect(0,0,w,h); // far sky
+  // parallax layers
+  ctx.fillStyle='#0e1218'; ctx.fillRect(0,0,w,h);
+  // mountains
+  ctx.fillStyle='#121722'; drawParallax(0.12,60); ctx.fillStyle='#141926'; drawParallax(0.24,120);
+  // ground
+  ctx.fillStyle='#0f131a'; ctx.fillRect(0,groundY(),w,h-groundY());
+}
+let bgOffset=0; function drawParallax(depth, y){ const w=innerWidth; const speedPar= speed*0.2*depth; bgOffset=(bgOffset+speedPar/60)%w; const step=220; for(let x=-bgOffset; x<w+step; x+=step){ ctx.beginPath(); ctx.moveTo(x,y+80); ctx.lineTo(x+100,y); ctx.lineTo(x+200,y+80); ctx.closePath(); ctx.fill(); } }
+
+function drawForeground(dt,dim){ const w=innerWidth,h=innerHeight;
+  // bottles
+  bottles.forEach(b=>{ ctx.strokeStyle='rgba(240,240,255,.7)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,TAU); ctx.stroke(); ctx.beginPath(); ctx.moveTo(b.x-4,b.y-6); ctx.lineTo(b.x+4,b.y-6); ctx.stroke(); });
+  // obstacles
+  obstacles.forEach(o=>{ ctx.fillStyle = o.type==='rock' ? (dim?'#202833':'#1b232e') : (dim?'#222a36':'#1d2531'); ctx.fillRect(o.x,o.y,o.w,o.h); });
+  // player
+  ctx.save(); ctx.translate(player.x, player.y + (player.slide? player.h*0.35:0)); ctx.scale( player.slide?1.05:1, player.slide?0.8:1 ); ctx.translate(-42,-42); ctx.drawImage(cowCan,0,0); ctx.restore();
+  // particles
+  particles.forEach(p=>{ if(p.label){ ctx.globalAlpha=clamp(p.life,0,1); ctx.font='16px ui-sans-serif,system-ui'; ctx.fillStyle='#e9f2ff'; ctx.fillText(p.label,p.x,p.y); ctx.globalAlpha=1; } else { ctx.globalAlpha=clamp(p.life,0,1); ctx.fillStyle='#eaeaea'; ctx.beginPath(); ctx.arc(p.x,p.y,2.2,0,TAU); ctx.fill(); ctx.globalAlpha=1; } });
+  // UI crosshair substitute: none; runner
+}
+
+// ===== HUD helpers & game flow =====
+function updateHud(){ scoreEl.textContent = Math.floor(score); milkEl.textContent = milk; levelEl.textContent = level; }
+function saveBest(){ const best=Math.max(Number(bestEl.textContent||0), Math.floor(score)); bestEl.textContent=String(best); localStorage.setItem('lamumuDashBest', String(best)); }
+function gameOver(){ playing=false; saveBest(); toast('Game Over! Score: '+Math.floor(score)); document.getElementById('menu').style.display='grid'; }
+
+// ===== Buttons =====
+const startBtn=document.getElementById('startBtn'); const pauseBtn=document.getElementById('pauseBtn'); const restartBtn=document.getElementById('restartBtn'); const menuStart=document.getElementById('menuStart');
+function start(){ if(playing) return; resetLives(); playing=true; paused=false; score=0; milk=0; level=1; speed=280; combo=0; comboTimer=0; obstacles.length=0; bottles.length=0; particles.length=0; obsTimer=0; botTimer=0; document.getElementById('menu').style.display='none'; resetPlayer(); updateHud(); }
+function togglePause(){ if(!playing) return; paused=!paused; toast(paused?'Paused':'Resumed'); }
+function restart(){ playing=false; paused=false; document.getElementById('menu').style.display='grid'; reset(); }
+startBtn.addEventListener('click',start); pauseBtn.addEventListener('click',togglePause); restartBtn.addEventListener('click',restart); menuStart.addEventListener('click',start);
+
+// ===== Lives display helper (no duplicate declarations) =====
+function drawLives(){ /* placeholder - lives are tracked in the `lives` variable and shown via HUD/popups */ }
+
+</script>
+</body>
+</html>
