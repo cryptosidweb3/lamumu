@@ -1,6 +1,0 @@
-{
-  "version": 2,
-  "builds": [
-    { "src": "lamumu_endless_runner_html.html", "use": "@vercel/static" }
-  ]
-}
